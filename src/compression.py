@@ -38,39 +38,15 @@ def load_gpt2(weights_path='pretrained/pytorch_model.bin', config_path='pretrain
     
     return model
 
-def get_spectrum(word, tokizer, model):
+def fft_compression(word, tokizer, model, removed):
     encoded_input = torch.tensor(tokizer.encode(word), dtype=torch.long)
     encoded = model.wte(encoded_input)
     spectrum = torch.fft.rfft(encoded).squeeze(0).squeeze(0)
-    return (spectrum.real.numpy(), spectrum.imag.numpy())
-
-
-def plot_spectrum(signal):
-    spectrum = torch.fft.rfft(signal).squeeze(0).squeeze(0)
-    magnitude = torch.abs(spectrum)
-    N = signal.shape[-1]
-    freqs = torch.fft.rfftfreq(N, d = 1)
-
-    plt.figure(figsize=(12, 4))
+    compress = torch.abs(spectrum).topk(removed, largest=False)
+    spectrum[~compress[1]] = 0.
+    compressed_s = torch.fft.irfft(spectrum)
+    return torch.cosine_similarity(encoded, compressed_s).item()
     
-    # Linear scale
-    plt.subplot(1, 2, 1)
-    plt.plot(freqs, magnitude)
-    plt.xlabel('Frequency (Hz)')
-    plt.ylabel('Magnitude')
-    plt.title('Linear Scale')
-    plt.grid(True, alpha=0.3)
-    
-    # Log scale (better for wide dynamic range)
-    plt.subplot(1, 2, 2)
-    plt.semilogy(freqs, magnitude)
-    plt.xlabel('Frequency (Hz)')
-    plt.ylabel('Magnitude (log scale)')
-    plt.title('Log Scale')
-    plt.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.show()
 
 def main():
     enc = tiktoken.get_encoding("gpt2")
@@ -83,18 +59,11 @@ def main():
         df["Tokens"] = df["Words"].apply(lambda x: enc.encode(x))
         df = df.explode("Tokens").reset_index(drop=True)
         df["Tokens"] = df["Tokens"].apply(lambda x: enc.decode([x]))
-        df['rfft'] = df["Tokens"].apply(lambda x: get_spectrum(x, enc, model))
-        freq = pd.DataFrame(df['rfft'].to_list(), columns=["real_rfft", "imag_rfft"])
-        freq["amplitude"] = freq['real_rfft']**2 + freq['imag_rfft']**2
-        freq["amplitude"] = freq["amplitude"].apply(lambda x: np.sqrt(x))
-        phase = []
-        for i in range(df.shape[0]):
-            phase.append(np.arctan2(freq['real_rfft'].iloc[i], freq['imag_rfft'].iloc[i]))
-        freq['phase'] = pd.Series(phase)
-
-        df = df.join(freq)
-
-        df.to_json("data/gpt2_rfft.json")
+        for i in range(100,101):
+            df[f"removed_{i}"] = df["Tokens"].apply(lambda x: fft_compression(x, enc, model,  i))
+            if df[f"removed_{i}"].mean() < .8:
+                break
+        print("hi")
 
 
 if __name__ == "__main__":
